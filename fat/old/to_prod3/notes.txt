@@ -1,0 +1,21 @@
+Changes:
+Visualization is a seperate independednt file.
+
+
+Run psqltable.py file to update the tables.
+
+
+to run the processing file : python fx_processing.py
+To run viz file :  streamlit run app.py --server.port 8080
+
+For importing packages from other folder
+
+1. Place the __init__.py file in the origin location
+2. Place the below code in the python file where you wish to import packages from origin location
+
+
+		import sys
+
+		sys.path.insert(1, 'path to rigin location')
+		from origin-location-py-file import function1, function2, function3
+

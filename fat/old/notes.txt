@@ -1,0 +1,12 @@
+Dataset 
+https://www.kaggle.com/mathurinache/dukascopy-forex-tick-data-20082019
+
+unzstd yourfilename.zst
+
+pip3 install simplefix
+pip3 install streamlit
+
+
+to Run
+
+streamlit run main.py

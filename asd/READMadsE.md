@@ -1,2 +1,0 @@
-# zat
-Zerodha Algorithmic Trader

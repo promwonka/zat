@@ -1,0 +1,331 @@
+import psycopg2
+import threading
+import pandas as pd
+import numpy as np
+import keras
+import pickle
+import time
+from datetime import datetime
+import random
+import string
+from db_connect import db_conn_fn
+
+
+ltsize = 1000
+leverage = 100
+multiplier = ltsize/leverage #10 for microlots, 100 for mini lots, 1000 for a lot
+pipc1 = 0.0003
+pipc2 = 0.0005
+
+#connect to the db
+
+conn = db_conn_fn()
+c = conn.cursor()
+
+
+
+#FUND
+
+def fund_view(crr):
+    c.execute("SELECT * FROM FUND WHERE currency = '%s'" %crr)
+    dt = c.fetchone()
+    return dt
+
+
+def fund_update(amt,crr):
+    dt = fund_view(crr)
+    x = 0.2 #fund allocation percentage controller
+    av = dt[3]+amt
+    to = dt[4]+av
+    re = to*(1-x)
+    av = to*x
+    c.execute("UPDATE FUND SET av_amt = '%s',rem_amt = '%s' , amount = '%s'  WHERE currency = '%s'" %(av,re,to,crr)) 
+    #print('fund Updated')
+    conn.commit()
+
+
+def tr_history_insert(nwid,type,avg_price,crncy_qty,t_time,stime,etime,crr):
+
+    status = 'Pending'
+    executed_price = 0
+    executed_qty = 0
+
+    c.execute("INSERT INTO tr_history (status,order_id,type,avg_price,executed_price,executed_qty,crncy_qty,t_time,stime,etime,currency) VALUES ('%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s')" %(status,nwid, type, avg_price, executed_price,executed_qty, crncy_qty,t_time,stime,etime,crr))
+    conn.commit()
+   
+
+
+def place_order_buy(nwid,price,ltsize,crr,stime,etime):
+
+    try:
+        now = datetime.now()
+        c.execute("INSERT INTO tradelist (order_id,type,avg_price,crncy_qty,currency, t_time,stime,etime) VALUES ('%s','Buy','%s','%s','%s','%s','%s','%s')" %(nwid,price,ltsize,crr,now,stime,etime))
+        conn.commit()
+        tr_history_insert(nwid,'Buy', price, ltsize,now,stime,etime,crr)
+
+    except Exception as e:
+        print(str(e))
+        print('failed while trying to insert buy order')
+
+
+def place_order_sell(nwid,price,ltsize,crr,slnt,stime,etime):
+
+
+    try:
+
+
+        c.execute("SELECT * FROM holding WHERE currency = '%s' "%(crr))
+        dfx = c.fetchone()
+
+        num = (dfx[1]/dfx[2])
+
+        if slnt == 0:
+
+            if price > num + pipc1 : #pip control
+                
+                now = datetime.now()
+
+                c.execute("INSERT INTO tradelist (order_id,type,avg_price,crncy_qty, currency, t_time,stime,etime) VALUES ('%s','Sell','%s','%s','%s','%s','%s','%s')" %(nwid,price,ltsize,crr,now,stime,etime))
+                conn.commit()
+                tr_history_insert(nwid,'Sell', price, ltsize,now,stime,etime,crr)
+                    
+
+            else:
+                pass
+                
+
+        elif slnt == 2:
+                if price >= num : 
+
+                    now = datetime.now()
+                    c.execute("INSERT INTO tradelist (order_id,type,avg_price,crncy_qty, currency, t_time,stime,etime) VALUES ('%s','Sell','%s','%s','%s','%s','%s','%s')" %(nwid,price,ltsize,crr,now,stime,etime))
+                    conn.commit()
+                    tr_history_insert(nwid,'Sell', price, ltsize,now,stime,etime,crr)
+
+                else: 
+                    pass
+
+        elif slnt == 1:
+
+                if (price + pipc2) <= num : #pip control
+                    now = datetime.now()
+                    c.execute("INSERT INTO tradelist (order_id,type,avg_price,crncy_qty, currency, t_time,stime,etime) VALUES ('Sell','%s','%s','%s','%s','%s','%s')" %(nwid,price,ltsize,crr,now,stime,etime))
+                    conn.commit()
+                    tr_history_insert(nwid,'Sell', price, ltsize,now,stime,etime,crr)
+
+                else: 
+                    pass
+
+    except Exception as e:
+        print(str(e))
+        print('failed while trying to place Sell order')
+            
+
+
+
+def data_proc(thread_name,crr,param,model):
+
+    model = keras.models.load_model(model)
+    params = pickle.load(open(param, "rb"))
+
+    mu = params["mu"]
+    std = params["std"]
+    lpk=0
+    #time.sleep(700)
+    try:
+        while True :
+
+            #print('hi2x')
+
+            start = time.perf_counter()
+            # time.sleep(10)
+            c.execute("SELECT * FROM data  WHERE currency = '%s' ORDER BY d_id DESC LIMIT 400 "%(crr))
+            dt = c.fetchall()
+
+
+            if len(dt) < 400:
+                time.sleep(1000)
+                c.execute("SELECT * FROM data  WHERE currency = '%s' ORDER BY d_id DESC LIMIT 400 "%(crr))
+                dt = c.fetchall()
+
+            else:
+                pass
+
+            df = pd.DataFrame(dt, columns = ['d_id', 'UTC', 'AskPrice','BidPrice','AskVolume','BidVolume','currency'])
+            df['UTC'] = pd.to_datetime(df['UTC'], errors='coerce')
+            df.dropna(inplace = True)
+            stime = df['UTC'].min()
+            etime = df['UTC'].max()
+            print(lpk)
+            lpk=lpk+1
+            #print(df.head(1))
+            days = df.iloc[[300]].UTC.dt.dayofweek
+            #print('date = ', df.UTC[300])
+            #print(days)
+            df = df.set_index('UTC')
+            df.drop(['d_id', 'currency'], axis=1, inplace = True)
+        
+            #print('fetched data')
+
+            df['midprice'] = (df['AskPrice'] + df['BidPrice'])/2
+            df = df[['midprice']].copy()
+            symbol = df.columns[0]
+            symbol
+            df["returns"] = np.log(df[symbol] / df[symbol].shift(300))
+            window = 50
+            df["dir"] = np.where(df["returns"] > 0.0003, 1, 0)
+            df["sma"] = df[symbol].rolling(window).mean() - df[symbol].rolling(150).mean()
+            #df["boll"] = (df[symbol] - df[symbol].rolling(window).mean()) / df[symbol].rolling(window).std()
+            df["min"] = df[symbol].rolling(window).min() / df[symbol] - 1
+            df["max"] = df[symbol].rolling(window).max() / df[symbol] - 1
+            df["mom"] = df["returns"].rolling(3).mean()
+            df["vol"] = df["returns"].rolling(window).std()
+            df.dropna(inplace = True)
+
+            #print ('generating lags')
+            lags = 5
+            cols = ["midprice","dir", "sma", "min", "max", "mom", "vol"]
+            features = ["midprice","dir", "sma", "min", "max", "mom", "vol"]
+
+
+            for f in features:
+                    for lag in range(1, lags + 1):
+                        col = "{}_lag_{}".format(f, lag)
+                        df[col] = df[f].shift(lag)
+                        cols.append(col)
+            df.dropna(inplace = True)
+
+            #print('fitting model')
+
+            df_s = (df - mu) / std
+            #pred = model.predict(df_s[cols])
+            df_s
+
+            #print('Model fitted')
+
+            df["proba"] = model.predict(df_s[cols])
+            # df["position"] = np.where(df.proba < 0.50, 0, np.nan) # 1. short where proba < 0.47
+            # df["position"] = np.where(df.proba > 0.60, 1, df.position) # 2. long where proba > 0.53
+            # df["position"] = df.position.ffill() # 4. in all other cases: hold position
+
+            pmx = df.loc[df['proba'] > 0.6]
+            pmx = pmx['midprice'].max()
+
+            pmn = df.loc[df['proba'] <= 0.6]
+            slntd = len(pmn)
+            pmn = pmn['midprice'].max()
+
+            if slntd > 200:
+                slnt = 1
+            else:
+                slnt = 0
+
+
+            finish = time.perf_counter()
+            lsts = [0,1,2,3]
+
+            if int(days) not in lsts :
+                slnt = 2
+                fx_trading(crr, 0,'not',pmn,slnt,stime,etime)
+
+            else:
+                fx_trading(crr, pmx,'ok',pmn,slnt,stime,etime)
+
+
+            #print(f'Finished in {round(finish-start,2)} second(s)')
+
+    except Exception as e:
+        print('Model run error')
+        print(str(e))
+
+
+
+
+
+def fx_trading(crr, pmx,days,pmn,slnt,stime,etime):
+
+    try:
+
+        c.execute("SELECT * FROM holding WHERE currency = '%s' "%(crr))
+        dfx = c.fetchone()
+        # print(crr)
+        # print(dfx)
+
+        amt = pmx*multiplier
+
+
+        if days == 'ok':
+        
+            if dfx[2] < ltsize*2:
+
+                if pmx > 0:
+
+                        c.execute("SELECT nextval('seq_id_gen_buy')")
+                        v = c.fetchone()
+                        nwid = v[0]
+                        place_order_buy(nwid,pmx,ltsize,crr,stime,etime)
+
+                else:
+                    pass
+            
+            else:
+                pass
+
+
+
+
+            if pmn > 0:
+                if dfx[2] > 0:
+
+                    c.execute("SELECT nextval('seq_id_gen_sell')")
+                    v = c.fetchone()
+                    nwid = v[0]
+                    place_order_sell(nwid,pmn,ltsize,crr,slnt,stime,etime)
+
+
+                else:
+                    pass
+            else:
+                pass
+            
+
+        else:
+            #print('hiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii')
+                            
+            if pmn > 0:
+                if dfx[2] > 0:
+                    slnt = 2
+                    c.execute("SELECT nextval('seq_id_gen_sell')")
+                    v = c.fetchone()
+                    nwid = v[0]
+                    place_order_sell(nwid,pmn,ltsize,crr,slnt,stime,etime) 
+
+
+                else:
+                    pass
+            else:
+                pass
+
+    except Exception as e:
+        print('Order sending error')
+        print(str(e))
+
+
+
+
+# try:
+#     thread1 = threading.Thread(target=data_proc, args=("thread1", 'eurusd','paramsj4.pkl','DNN_modelj4.h5'))
+#     # thread2 = threading.Thread(target=order_fetch, args=("thread2", 'eurusd'))
+
+#     # Start the threads
+#     thread1.start()
+#     # thread2.start()
+
+#     thread1.join()
+#     # thread2.join()
+
+# except Exception as e:
+#         print('Thread Error')
+#         print(str(e))
+
+

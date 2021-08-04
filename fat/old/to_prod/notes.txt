@@ -1,0 +1,21 @@
+pip install streamlit
+pip install matplotlib
+
+
+
+To run main file :  streamlit run streamlit_app.py --server.port 8080
+
+
+
+
+For importing packages from other folder
+
+1. Place the __init__.py file in the origin location
+2. Place the below code in the python file where you wish to import packages from origin location
+
+
+		import sys
+
+		sys.path.insert(1, 'path to rigin location')
+		from origin-location-py-file import function1, function2, function3
+

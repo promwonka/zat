@@ -1,0 +1,14 @@
+
+Concatenation
+
+python3 dtconc.py 'eurusd.csv' ,'eurusd', 'gbpusd.csv' , 'gbpusd' ,'all.csv'
+
+
+arguments are
+< name of the first dataset, currency of first dataset, name of the second dataset, currency of second dataset, final name of the merged dataset >
+
+
+
+Training
+
+python3 model_training.py
